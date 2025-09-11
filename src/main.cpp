@@ -73,6 +73,10 @@ int main(int argc, char* argv[]) {
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     //printArray(SIZE, c, true);
     printCmpResult(SIZE, b, c);
+    /*for (int i = 0; i < SIZE; ++i)
+    {
+        printf("OG: %d, Test: %d, Got: %d \n", a[i], b[i], c[i]);
+    }*/
 
     zeroArray(SIZE, c);
     printDesc("work-efficient scan, non-power-of-two");
