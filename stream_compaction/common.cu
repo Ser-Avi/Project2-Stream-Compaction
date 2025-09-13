@@ -25,8 +25,8 @@ namespace StreamCompaction {
         __global__ void kernMapToBoolean(int n, int *bools, const int *idata) {
             // TODO
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx > n) return;
-            bools[idx] = idata[idx] == 0 ? 0 : 1;
+            if (idx > n - 1 || idx < 0) return;
+            bools[idx] = idata[idx] != 0;
         }
 
         /**
@@ -37,10 +37,24 @@ namespace StreamCompaction {
                 const int *idata, const int *bools, const int *indices) {
             // TODO
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx > n) return;
+            if (idx > n - 1 || idx < 0) return;
             if (bools[idx] == 1)
             {
                 odata[indices[idx]] = idata[idx];
+            }
+        }
+
+        /// <summary>
+        /// Resets buffer to the set value - used for padding with 0s
+        /// </summary>
+        /// <param name="N"></param>
+        /// <param name="intBuffer"></param>
+        /// <param name="value"></param>
+        /// <returns></returns>
+        __global__ void kernResetIntBuffer(int N, int* intBuffer, int value) {
+            int index = (blockIdx.x * blockDim.x) + threadIdx.x;
+            if (index < N && index > -1) {
+                intBuffer[index] = value;
             }
         }
 
