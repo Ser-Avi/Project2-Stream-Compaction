@@ -18,7 +18,6 @@ namespace StreamCompaction {
         __global__ void kernUpSweep(int n, int* data, int d)
         {
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx > n || idx < 0) return;
             idx = idx * d - 1;
             if (idx > n || idx < 0) return;
             data[idx] += data[idx - (d >> 1)];
@@ -32,7 +31,6 @@ namespace StreamCompaction {
         __global__ void kernDownSweep(int n, int* data, int d)
         {
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx > n || idx < 0) return;
             idx = idx * d - 1;
             if (idx > n || idx < 0) return;
             // Left child will become copy of parent
@@ -52,25 +50,27 @@ namespace StreamCompaction {
             int reqSize = ilog2ceil(n);
             int ceil = 1 << reqSize;
 
-            dim3 fullBlocksPerGrid((ceil + blockSize - 1) / blockSize);
-
-            int* array;
-            cudaMalloc((void**)&array, sizeof(int) * ceil);
-            cudaMemcpy(array, idata, sizeof(int) * ceil, cudaMemcpyHostToDevice);
+            int* dev_array;
+            cudaMalloc((void**)&dev_array, sizeof(int) * ceil);
+            cudaMemcpy(dev_array, idata, sizeof(int) * ceil, cudaMemcpyHostToDevice);
             for (int d = 1; d < reqSize + 1; ++d)
             {
-                kernUpSweep << <fullBlocksPerGrid, blockSize>> > (ceil - 1, array, 1 << d);
+                // we halve the number of blocks, since we need half as many threads
+                // same applies below
+                dim3 blocksPerGrid(((ceil >> (d - 1)) + blockSize - 1) / blockSize);
+                kernUpSweep << <blocksPerGrid, blockSize>> > (ceil - 1, dev_array, 1 << d);
             }
             // this does this: array[n - 1] = 0; I think the fastest way, but looks crazy
-            kernChangeOneVal << <1, 1 >> > (ceil - 1, array, 0);
+            kernChangeOneVal << <1, 1 >> > (ceil - 1, dev_array, 0);
             
             for (int d = reqSize; d > 0; --d)
             {
-                kernDownSweep << <fullBlocksPerGrid, blockSize >> > (ceil - 1, array, 1 << d);
+                dim3 blocksPerGrid(((ceil >> (d - 1)) + blockSize - 1) / blockSize);
+                kernDownSweep << <blocksPerGrid, blockSize >> > (ceil - 1, dev_array, 1 << d);
             }
-            cudaMemcpy(odata, array, sizeof(int) * ceil, cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, dev_array, sizeof(int) * ceil, cudaMemcpyDeviceToHost);
 
-            cudaFree(array);
+            cudaFree(dev_array);
             timer().endGpuTimer();
         }
 
@@ -92,47 +92,51 @@ namespace StreamCompaction {
             dim3 fullBlocksPerGrid((n + blockSize - 1) / blockSize);
             dim3 scanBlocksPerGrid((ceil + blockSize - 1) / blockSize);
 
-            int* iArray;
-            int* boolArray;
-            int* boolSum;
-            int* outTemp;
-            cudaMalloc((void**)&boolArray, sizeof(int) * n);
-            cudaMalloc((void**)&iArray, sizeof(int) * n);
-            cudaMalloc((void**)&boolSum, sizeof(int) * ceil);
-            cudaMalloc((void**)&outTemp, sizeof(int) * n);
-            Common::kernResetIntBuffer<<<fullBlocksPerGrid, blockSize >>>(n, iArray, 0);
-            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, boolArray, 0);
-            cudaMemcpy(iArray, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
+            int* dev_iArray;            // input array buffer
+            int* dev_boolArray;         // boolean array buffer
+            int* dev_boolScan;           // scan of the boolean array buffer
+            int* dev_outArray;          // the output array buffer
+            cudaMalloc((void**)&dev_boolArray, sizeof(int) * n);
+            cudaMalloc((void**)&dev_iArray, sizeof(int) * n);
+            cudaMalloc((void**)&dev_boolScan, sizeof(int) * ceil);
+            cudaMalloc((void**)&dev_outArray, sizeof(int) * n);
+            // these 0 paddings are here just as a safety net, but in theory this should work without them
+            // theory is not practice though
+            Common::kernResetIntBuffer<<<fullBlocksPerGrid, blockSize >>>(n, dev_iArray, 0);
+            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, 0);
+            cudaMemcpy(dev_iArray, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
 
             // Populate bool array
-            Common::kernMapToBoolean << <fullBlocksPerGrid, blockSize >> > (n, boolArray, iArray);
+            Common::kernMapToBoolean << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, dev_iArray);
             
             // Scan on bool array
-            Common::kernResetIntBuffer << <scanBlocksPerGrid, blockSize >> > (ceil, boolSum, 0);    // padding for scan to work properly
-            cudaMemcpy(boolSum, boolArray, sizeof(int) * n, cudaMemcpyDeviceToDevice);
+            Common::kernResetIntBuffer << <scanBlocksPerGrid, blockSize >> > (ceil, dev_boolScan, 0);    // padding for scan to work properly
+            cudaMemcpy(dev_boolScan, dev_boolArray, sizeof(int) * n, cudaMemcpyDeviceToDevice);
             for (int d = 1; d < reqSize + 1; ++d)
             {
-                kernUpSweep << <scanBlocksPerGrid, blockSize >> > (ceil - 1, boolSum, 1 << d);
+                scanBlocksPerGrid = dim3(((ceil >> (d - 1)) + blockSize - 1) / blockSize);
+                kernUpSweep << <scanBlocksPerGrid, blockSize >> > (ceil - 1, dev_boolScan, 1 << d);
             }
-            kernChangeOneVal << <1, 1 >> > (ceil - 1, boolSum, 0);
+            kernChangeOneVal << <1, 1 >> > (ceil - 1, dev_boolScan, 0);
             for (int d = reqSize; d > 0; --d)
             {
-                kernDownSweep << <scanBlocksPerGrid, blockSize >> > (ceil - 1, boolSum, 1 << d);
+                scanBlocksPerGrid = dim3(((ceil >> (d - 1)) + blockSize - 1) / blockSize);
+                kernDownSweep << <scanBlocksPerGrid, blockSize >> > (ceil - 1, dev_boolScan, 1 << d);
             }
 
-            cudaMemcpy(odata, boolSum, sizeof(int) * (n + (n % 2)), cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, dev_boolScan, sizeof(int) * (n + (n % 2)), cudaMemcpyDeviceToHost);
             int size = odata[n - ((n + 1) % 2)];
 
             //// Compact
-            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, outTemp, 0);    // this is here so garbage values don't accidentally get added
-            Common::kernScatter << <fullBlocksPerGrid, blockSize >> > (n, outTemp, iArray, boolArray, boolSum);
+            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, 0);    // this is here so garbage values don't accidentally get added
+            Common::kernScatter << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, dev_iArray, dev_boolArray, dev_boolScan);
 
-            cudaMemcpy(odata, outTemp, sizeof(int) * n, cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, dev_outArray, sizeof(int) * n, cudaMemcpyDeviceToHost);
 
-            cudaFree(boolArray);
-            cudaFree(iArray);
-            cudaFree(boolSum);
-            cudaFree(outTemp);
+            cudaFree(dev_boolArray);
+            cudaFree(dev_iArray);
+            cudaFree(dev_boolScan);
+            cudaFree(dev_outArray);
             timer().endGpuTimer();
             return size;
         }
