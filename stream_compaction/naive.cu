@@ -7,7 +7,7 @@ namespace StreamCompaction {
     namespace Naive {
         using StreamCompaction::Common::PerformanceTimer;
 
-        int blockSize = 128;
+        int blockSize = 32;
 
         PerformanceTimer& timer()
         {
@@ -19,7 +19,7 @@ namespace StreamCompaction {
         {
             int idx = blockIdx.x * blockDim.x + threadIdx.x;
             int pow2 = 1 << (d - 1);
-            if (idx >= n) return;
+            if (idx > n - 1 || idx < 0) return;
 
             if (idx >= pow2)
             {
@@ -35,7 +35,6 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             // TODO
             dim3 fullBlocksPerGrid((n + blockSize - 1) / blockSize);
 
@@ -49,8 +48,11 @@ namespace StreamCompaction {
             cudaMalloc((void**)&arrayB, sizeof(int) * ceil);
             cudaMemcpy(arrayB, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
 
+            timer().startGpuTimer();
+
             for (int d = 1; d <= ilog2ceil(n); ++d)
             {
+                // this block count should be cut in half with each loop, but is left like this to be truly "naive"
                 kernelScan << <fullBlocksPerGrid, blockSize >> > (ceil, arrayA, arrayB, d);
                 std::swap(arrayA, arrayB);
             }
@@ -64,10 +66,11 @@ namespace StreamCompaction {
             }
             odata[0] = 0;
 
+            timer().endGpuTimer();
+
             cudaFree(arrayA);
             cudaFree(arrayB);
 
-            timer().endGpuTimer();
         }
     }
 }

@@ -7,7 +7,7 @@ namespace StreamCompaction {
     namespace Efficient {
         using StreamCompaction::Common::PerformanceTimer;
 
-        int blockSize = 128;
+        int blockSize = 32;
 
         PerformanceTimer& timer()
         {
@@ -45,7 +45,6 @@ namespace StreamCompaction {
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
         void scan(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             // TODO
             int reqSize = ilog2ceil(n);
             int ceil = 1 << reqSize;
@@ -53,6 +52,7 @@ namespace StreamCompaction {
             int* dev_array;
             cudaMalloc((void**)&dev_array, sizeof(int) * ceil);
             cudaMemcpy(dev_array, idata, sizeof(int) * ceil, cudaMemcpyHostToDevice);
+            timer().startGpuTimer();
             for (int d = 1; d < reqSize + 1; ++d)
             {
                 // we halve the number of blocks, since we need half as many threads
@@ -68,10 +68,10 @@ namespace StreamCompaction {
                 dim3 blocksPerGrid(((ceil >> (d - 1)) + blockSize - 1) / blockSize);
                 kernDownSweep << <blocksPerGrid, blockSize >> > (ceil - 1, dev_array, 1 << d);
             }
+            timer().endGpuTimer();
             cudaMemcpy(odata, dev_array, sizeof(int) * ceil, cudaMemcpyDeviceToHost);
 
             cudaFree(dev_array);
-            timer().endGpuTimer();
         }
 
         /**
@@ -84,7 +84,6 @@ namespace StreamCompaction {
          * @returns      The number of elements remaining after compaction.
          */
         int compact(int n, int *odata, const int *idata) {
-            timer().startGpuTimer();
             // TODO
             int reqSize = ilog2ceil(n);
             int ceil = 1 << reqSize;
@@ -105,6 +104,8 @@ namespace StreamCompaction {
             Common::kernResetIntBuffer<<<fullBlocksPerGrid, blockSize >>>(n, dev_iArray, 0);
             Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, 0);
             cudaMemcpy(dev_iArray, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
+
+            timer().startGpuTimer();
 
             // Populate bool array
             Common::kernMapToBoolean << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, dev_iArray);
@@ -131,13 +132,14 @@ namespace StreamCompaction {
             Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, 0);    // this is here so garbage values don't accidentally get added
             Common::kernScatter << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, dev_iArray, dev_boolArray, dev_boolScan);
 
+            timer().endGpuTimer();
+
             cudaMemcpy(odata, dev_outArray, sizeof(int) * n, cudaMemcpyDeviceToHost);
 
             cudaFree(dev_boolArray);
             cudaFree(dev_iArray);
             cudaFree(dev_boolScan);
             cudaFree(dev_outArray);
-            timer().endGpuTimer();
             return size;
         }
     }
