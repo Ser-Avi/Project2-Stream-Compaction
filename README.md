@@ -34,18 +34,26 @@ This project implements and compares different scanning (adding up values in an 
 All of these results run with a block size of 32 threads. I found that this is what consistently yields the best results, since the block count is varied, and since we end up using less than a warp's worth for the last few loops of the work-efficient algorithms, I wanted to minimize the threadcount per block--ie, making it 32.
 The algorithms are tested for both power of 2 arrays and non-power-of-2 arrays, which have the same length and subtract 3.
 Here are the results for varying array lengths for the scan algorithm in graph form, with the exact values visible further down:
-![scanp2.png]
-![scannp2.png]
+
+![](scanp2.png)
+![](scannp2.png)
+
 As we can see, there isn't much difference between the two different algorithms, except for Thrust, which seems to speed up relatively for non-power-of-2 arrays.
 We can also see that CPU and Naive are actually quite good for smaller array sizes. This makes sense, since the work-efficient algorithm comes with extra overhead, such as using two different kernels that we launch log(n) times. The speedup is there, but this overhead is larger than the time we save with this algorithm. CPU is faster than Naive because Naive has a lot of idling warps that really don't need to be launched. We're wasting a lot of time doing nothing, and the CPU is honestly not that slow for these values.
 Later, when the array is around 2^20, work-efficient becomes the fastest (even overtaking thrust!), since it is around here where the time we save with this algorithm, and by optimizing the number of blocks and threads we launch, makes up for the amount of overhead caused by the extra kernel launches. However, Thrust soon overtakes this algorithm, since I imagine it is very well optimized. Unfortunately, the Github page of its documentation was down at the time of me writing this, so I can not say how exactly it is optimized. Interestingly, work-efficient and thrust start to converge again at 2^30, but I could not test for larger values due to memory overflow.
 
 The results for compaction are similar:
-![compact.png]
+
+![](compact.png)
+
 Since I didn't have a naive GPU method for this, I combined the 2^n and non-2^n sized arrays into this one graph, so we can clearly see that there isn't much difference between their runtime. We also see a similar trend as with the scan algorithms, where CPU starts out being the fastest, but the work-efficient GPU method overtakes it at 2^20th. However, the GPU algorithm suffers above 2^28th and the CPU method overtakes it again. I am not sure why this is the case, especially since this algorithm is pretty much the same as the scan one, with two added kernels that should be quite fast. To investigate, I profiled only the compaction algorithms with Nsight Compute, the result of which can be found in the file "Compaction_Compute_Results." These results showed me that my two extra kernels, "kernMapToBoolean" and "kernScatter" were indeed very slow, and while it gave me the suggestion that I should double my warps, it showed that I do not have any expected speedup, as shown in this image:
-![kernelTimes.png]
+
+![](kernelTimes.png)
+
 I still decided to increase my block size by 2 just for these two kernels, and captured the results again, which showed no real improvement (as somewhat expected by the program itself). These results can be seen in "Compaction_Compute_Results2," and in the image below:
-![kernelTimes2.png]
+
+![](kernelTimes2.png)
+
 I believe that these kernels are so slow because we are not accessing contiguous memory in them, and when our arrays get this large, this becomes a massive problem, since values can be all over the place. This is supported by how massive the memory throughput is for these kernels. The CPU has no such issues with much more working memory, thus it overtakes this algorithm.
 
 Since the graphs make the exact values hard to see, and since the time is on a logarithmic scale, here are the exact values measured that are plotted in the graphs:
