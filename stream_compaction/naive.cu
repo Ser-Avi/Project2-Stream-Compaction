@@ -41,23 +41,23 @@ namespace StreamCompaction {
             int reqSize = ilog2ceil(n);
             int ceil = 1 << reqSize;
 
-            int* arrayA;
-            int* arrayB;
+            int* dev_arrayA;
+            int* dev_arrayB;
 
-            cudaMalloc((void**)&arrayA, sizeof(int) * ceil);
-            cudaMalloc((void**)&arrayB, sizeof(int) * ceil);
-            cudaMemcpy(arrayB, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
+            cudaMalloc((void**)&dev_arrayA, sizeof(int) * ceil);
+            cudaMalloc((void**)&dev_arrayB, sizeof(int) * ceil);
+            cudaMemcpy(dev_arrayB, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
 
             timer().startGpuTimer();
 
             for (int d = 1; d <= ilog2ceil(n); ++d)
             {
                 // this block count should be cut in half with each loop, but is left like this to be truly "naive"
-                kernelScan << <fullBlocksPerGrid, blockSize >> > (ceil, arrayA, arrayB, d);
-                std::swap(arrayA, arrayB);
+                kernelScan << <fullBlocksPerGrid, blockSize >> > (ceil, dev_arrayA, dev_arrayB, d);
+                std::swap(dev_arrayA, dev_arrayB);
             }
 
-            cudaMemcpy(odata, arrayB, sizeof(int) * n, cudaMemcpyDeviceToHost);
+            cudaMemcpy(odata, dev_arrayB, sizeof(int) * n, cudaMemcpyDeviceToHost);
 
             // shift to exclusive
             for (int i = n - 1; i > 0; --i)
@@ -68,8 +68,8 @@ namespace StreamCompaction {
 
             timer().endGpuTimer();
 
-            cudaFree(arrayA);
-            cudaFree(arrayB);
+            cudaFree(dev_arrayA);
+            cudaFree(dev_arrayB);
 
         }
     }

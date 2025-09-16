@@ -99,10 +99,7 @@ namespace StreamCompaction {
             cudaMalloc((void**)&dev_iArray, sizeof(int) * n);
             cudaMalloc((void**)&dev_boolScan, sizeof(int) * ceil);
             cudaMalloc((void**)&dev_outArray, sizeof(int) * n);
-            // these 0 paddings are here just as a safety net, but in theory this should work without them
-            // theory is not practice though
-            Common::kernResetIntBuffer<<<fullBlocksPerGrid, blockSize >>>(n, dev_iArray, 0);
-            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, 0);
+
             cudaMemcpy(dev_iArray, idata, sizeof(int) * n, cudaMemcpyHostToDevice);
 
             timer().startGpuTimer();
@@ -111,7 +108,6 @@ namespace StreamCompaction {
             Common::kernMapToBoolean << <fullBlocksPerGrid, blockSize >> > (n, dev_boolArray, dev_iArray);
             
             // Scan on bool array
-            Common::kernResetIntBuffer << <scanBlocksPerGrid, blockSize >> > (ceil, dev_boolScan, 0);    // padding for scan to work properly
             cudaMemcpy(dev_boolScan, dev_boolArray, sizeof(int) * n, cudaMemcpyDeviceToDevice);
             for (int d = 1; d < reqSize + 1; ++d)
             {
@@ -125,11 +121,11 @@ namespace StreamCompaction {
                 kernDownSweep << <scanBlocksPerGrid, blockSize >> > (ceil - 1, dev_boolScan, 1 << d);
             }
 
+            // the resulting scan value was at a different location depending on padding or not, so the extra arithmetic here adjusts for that
             cudaMemcpy(odata, dev_boolScan, sizeof(int) * (n + (n % 2)), cudaMemcpyDeviceToHost);
             int size = odata[n - ((n + 1) % 2)];
 
             //// Compact
-            Common::kernResetIntBuffer << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, 0);    // this is here so garbage values don't accidentally get added
             Common::kernScatter << <fullBlocksPerGrid, blockSize >> > (n, dev_outArray, dev_iArray, dev_boolArray, dev_boolScan);
 
             timer().endGpuTimer();
